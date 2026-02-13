@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ライブ配信用フレーム</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 1920px;
+            height: 1080px;
+            position: relative;
+            overflow: hidden;
+            background: transparent;
+            font-family: 'MV Boli', sans-serif;
+        }
+
+        /* ベース画像レイヤー */
+        .base-image {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 1920px;
+            height: 1080px;
+            z-index: 1;
+        }
+
+        /* 時計 */
+        .datetime {
+            position: absolute;
+            left: 240px;
+            bottom: 32px;
+            color: #fff;
+            font-size: 24px;
+            z-index: 2;
+            white-space: nowrap;
+        }
+
+        /* アニメーション要素 */
+        .animation-container {
+            position: absolute;
+            right: 180px;
+            bottom: 120px;
+            z-index: 3;
+        }
+
+        .animation-image {
+            position: absolute;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+            transform: scale(10);
+            transform-origin: center;
+            opacity: 0;
+            transition: none;
+        }
+
+        .animation-image.active {
+            opacity: 1;
+        }
+
+        .error-message {
+            color: #ff0000;
+            text-align: center;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 10px;
+            display: none;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <!-- ベース画像 -->
+    <img src="img/base.png" alt="Base" class="base-image">
+
+    <!-- 時計 -->
+    <div class="datetime" id="datetime"></div>
+
+    <!-- アニメーション要素 -->
+    <div class="animation-container">
+        <img src="img/1.PNG" alt="Frame 1" class="animation-image" id="image1">
+        <img src="img/2.PNG" alt="Frame 2" class="animation-image" id="image2">
+        
+        <div class="error-message" id="errorMessage">
+            マイクへのアクセスが拒否されました
+        </div>
+    </div>
+
+    <script>
+        // 時計の更新
+        function updateDateTime() {
+            const now = new Date();
+            
+            // 日付のフォーマット（yyyy-mm-dd）
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const dateString = `${year}-${month}-${day}`;
+            
+            // 時刻のフォーマット（HH:MM tt）
+            let hours = now.getHours();
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12;
+            hours = hours ? hours : 12; // 0時は12時として表示
+            const timeString = `${hours}:${minutes} ${ampm}`;
+            
+            // DOM要素を更新（yyyy-mm-dd HH:MM tt 形式）
+            document.getElementById('datetime').textContent = `${dateString} ${timeString}`;
+        }
+
+        // 時計の初回実行と定期更新
+        updateDateTime();
+        setInterval(updateDateTime, 1000);
+
+        // アニメーション関連の変数
+        let audioContext;
+        let analyser;
+        let microphone;
+        let timeDataArray;
+        let animationFrameId;
+        let currentFrame = 0;
+        let lastFrameTime = 0;
+        const FRAME_INTERVAL = 100; // フレーム切り替え間隔（ミリ秒）
+        
+        // メーター設定
+        const MIN_DB = -60;  // 最小表示レベル（dB）
+        const THRESHOLD_DB = -40; // アニメーション開始閾値（dB）
+        let isAnimating = false;
+
+        async function initAudio() {
+            try {
+                // マイクへのアクセスを要求
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    } 
+                });
+
+                // AudioContextを作成
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                microphone = audioContext.createMediaStreamSource(stream);
+
+                // アナライザーの設定
+                analyser.fftSize = 2048;
+                analyser.smoothingTimeConstant = 0.3;
+                timeDataArray = new Float32Array(analyser.fftSize);
+
+                // マイクをアナライザーに接続
+                microphone.connect(analyser);
+
+                // エラーメッセージを非表示
+                document.getElementById('errorMessage').classList.remove('show');
+
+                // 初期状態で1.PNGを表示
+                showStaticFrame();
+
+                // アニメーション開始
+                animate();
+
+            } catch (error) {
+                console.error('マイクへのアクセスエラー:', error);
+                document.getElementById('errorMessage').classList.add('show');
+            }
+        }
+
+        function animate() {
+            if (!analyser) return;
+
+            // 時間領域データを取得
+            analyser.getFloatTimeDomainData(timeDataArray);
+
+            // RMS（Root Mean Square）を計算してdBに変換
+            let sum = 0;
+            for (let i = 0; i < timeDataArray.length; i++) {
+                const sample = timeDataArray[i];
+                sum += sample * sample;
+            }
+            
+            const rms = Math.sqrt(sum / timeDataArray.length);
+            const rmsDb = rms > 0 ? 20 * Math.log10(rms) : MIN_DB;
+            
+            // -40dB以上の場合、アニメーションを開始
+            const shouldAnimate = rmsDb >= THRESHOLD_DB;
+            
+            if (shouldAnimate) {
+                if (!isAnimating) {
+                    isAnimating = true;
+                    // 最初のフレームを表示
+                    showFrame(0);
+                }
+                
+                // フレーム切り替え
+                const currentTime = Date.now();
+                if (currentTime - lastFrameTime >= FRAME_INTERVAL) {
+                    currentFrame = (currentFrame + 1) % 2; // 0と1を交互に
+                    showFrame(currentFrame);
+                    lastFrameTime = currentTime;
+                }
+            } else {
+                // 音量が閾値以下の場合、アニメーションを停止して静止フレームを表示
+                if (isAnimating) {
+                    isAnimating = false;
+                    currentFrame = 0; // フレームをリセット
+                    showStaticFrame();
+                }
+            }
+
+            animationFrameId = requestAnimationFrame(animate);
+        }
+
+        function showFrame(frameIndex) {
+            // 現在表示されているフレームを確認
+            const image1 = document.getElementById('image1');
+            const image2 = document.getElementById('image2');
+            const isImage1Active = image1.classList.contains('active');
+            const isImage2Active = image2.classList.contains('active');
+            
+            // 同じフレームの場合は何もしない
+            if ((frameIndex === 0 && isImage1Active) || (frameIndex === 1 && isImage2Active)) {
+                return;
+            }
+            
+            // 新しいフレームを先に表示（クロスフェード方式）
+            if (frameIndex === 0) {
+                image1.classList.add('active');
+                // その後、古いフレームを非表示
+                if (isImage2Active) {
+                    image2.classList.remove('active');
+                }
+            } else {
+                image2.classList.add('active');
+                // その後、古いフレームを非表示
+                if (isImage1Active) {
+                    image1.classList.remove('active');
+                }
+            }
+        }
+
+        function showStaticFrame() {
+            // 静止フレーム（1.PNG）を表示
+            const image1 = document.getElementById('image1');
+            const image2 = document.getElementById('image2');
+            
+            // 既にimage1が表示されている場合は何もしない
+            if (image1.classList.contains('active')) {
+                return;
+            }
+            
+            // image1を先に表示してから、image2を非表示
+            image1.classList.add('active');
+            if (image2.classList.contains('active')) {
+                image2.classList.remove('active');
+            }
+        }
+
+        // ページ読み込み時に初期化
+        window.addEventListener('load', initAudio);
+
+        // クリーンアップ
+        window.addEventListener('beforeunload', () => {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+            if (audioContext) {
+                audioContext.close();
+            }
+        });
+    </script>
+</body>
+</html>
