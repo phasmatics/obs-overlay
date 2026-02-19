@@ -106,6 +106,10 @@
             const day = String(now.getDate()).padStart(2, '0');
             const dateString = `${year}-${month}-${day}`;
             
+            // 曜日の略字（SUN, MON, TUE, ...）
+            const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+            const dayOfWeek = dayNames[now.getDay()];
+            
             // 時刻のフォーマット（HH:MM tt）
             let hours = now.getHours();
             const minutes = String(now.getMinutes()).padStart(2, '0');
@@ -114,8 +118,8 @@
             hours = hours ? hours : 12; // 0時は12時として表示
             const timeString = `${hours}:${minutes} ${ampm}`;
             
-            // DOM要素を更新（yyyy-mm-dd HH:MM tt 形式）
-            document.getElementById('datetime').textContent = `${dateString} ${timeString}`;
+            // DOM要素を更新（yyyy-mm-dd MON HH:MM tt 形式）
+            document.getElementById('datetime').textContent = `${dateString} ${dayOfWeek} ${timeString}`;
         }
 
         // 時計の初回実行と定期更新
@@ -281,6 +285,3 @@
     </script>
 </body>
 </html>
-
-
-
